@@ -15,3 +15,6 @@ Okul logosunu `public/logo.png` adıyla ekleyin (yoksa geçici `logo.svg` görü
 
 ## Roller
 Yönetici tüm öğrencileri, kız bölümü belletmeni yalnızca kızları, erkek bölümü belletmeni yalnızca erkekleri görür. Veliler giriş yapmaz; `/veli` sayfasında telefon + WhatsApp kodu ile izin talep eder.
+
+## Güncelleme notu
+Mevcut veritabanında `guncelleme.sql` dosyasını (Neon > SQL Editor) bir kez çalıştırın.

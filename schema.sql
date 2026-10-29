@@ -47,6 +47,7 @@ CREATE TABLE attendance (
   session TEXT NOT NULL CHECK (session IN ('etut','yat')),
   state TEXT NOT NULL CHECK (state IN ('var','yok','gec','izinli')),
   taken_by INT REFERENCES users(id),
+  notified TEXT,
   UNIQUE (student_id, day, session)
 );
 CREATE TABLE audit_log (
