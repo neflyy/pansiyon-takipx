@@ -1,31 +1,25 @@
-# Prof. Dr. Necmettin Erbakan Fen Lisesi - Pansiyon ve Yurt Bilgi Sistemi
+# Prof. Dr. Necmettin Erbakan Fen Lisesi Pansiyon ve Yurt Bilgi Sistemi
 
-Bu proje, **Prof. Dr. Necmettin Erbakan Fen Lisesi** pansiyon süreçlerini (veli izni, WhatsApp OTP girişi, belletmen yoklama, cinsiyet bazlı öğrenci izolasyonu ve yönetici paneli) otomatikleştiren Next.js 15 projesidir.
+## Veritabanı
+- Yeni kurulum: `schema.sql` dosyasını Neon > SQL Editor'da çalıştırın.
+- Mevcut veritabanı: `migration.sql` dosyasını çalıştırın. Eski öğrenci kayıtlarında cinsiyet boş olacağından Öğrenciler sekmesinden listeyi yeniden yükleyin (eski kayıtları Neon'dan silin).
 
-## 🚀 Hızlı Kurulum
+## Ortam değişkenleri (Vercel > Settings > Environment Variables)
+DATABASE_URL, JWT_SECRET, WA_PHONE_ID, WA_TOKEN, WA_TEMPLATE
 
-1. ZIP dosyasını klasöre çıkartın:
-2. Terminalde proje klasörüne girin ve bağımlılıkları yükleyin:
-   ```bash
-   npm install
-   ```
-3. `.env.example` dosyasının adını `.env` olarak değiştirin ve kendi veritabanı (Neon PostgreSQL) ve WhatsApp API anahtarlarınızı girin:
-   ```env
-   DATABASE_URL="postgresql://neondb_owner:YOUR_PASSWORD@ep-xyz.eu-central-1.aws.neon.tech/neondb?sslmode=require"
-   JWT_SECRET="cok_gizli_jwt_anahtariniz_12345"
-   WHATSAPP_API_KEY="whatsapp_api_anahtariniz"
-   ```
-4. Veritabanını hazırlamak için `database/schema.sql` dosyasındaki SQL sorgularını Neon PostgreSQL SQL Editor alanında çalıştırın.
-5. Geliştirme sunucusunu başlatın:
-   ```bash
-   npm run dev
-   ```
-6. Tarayıcınızda `http://localhost:3000` adresine gidin.
+## WhatsApp onay kodu (Meta WhatsApp Business Cloud API)
+1. developers.facebook.com'da uygulama açın, WhatsApp ürününü ekleyin; okul numarasını (WhatsApp'ta kayıtlı olmayan) ekleyin.
+2. Telefon numarası ID'si → `WA_PHONE_ID`, kalıcı erişim anahtarı (System User token) → `WA_TOKEN`.
+3. Mesaj şablonu oluşturun (dil: Türkçe, ad: `veli_giris_kodu` → `WA_TEMPLATE`):
+```
+Sayın Velimiz ({{1}}),
+Veli Portalı Giriş Şifreniz: {{2}}
+Güvenliğiniz için bu kodu kimseyle paylaşmayınız.
+```
+   {{1}} veli adı, {{2}} 6 haneli koddur. Meta bu metni "Doğrulama" yerine "Yardımcı (Utility)" kategorisinde değerlendirebilir veya standart doğrulama biçimini isteyebilir; onay sonucuna göre kodu birlikte uyarlarız.
 
-## 🎨 Tasarım ve Özellikler
-- **Renk Teması:** Modern Mavi - Beyaz (`bg-gradient-to-br from-blue-50 to-white`, `bg-blue-700`).
-- **Kurumsal İdentite:** Okul amblemi, "Prof. Dr. Necmettin Erbakan Fen Lisesi Pansiyon ve Yurt Bilgi Sistemi" başlığı.
-- **Güvenlik & Yasal:** En altta "Bu sistem KVKK uyumludur. Tüm hakları saklıdır. © 2026" uyarısı.
-- **Veli Girişi:** Şifresiz, sadece telefon numarası + WhatsApp 6 haneli OTP kodu ile.
-- **Belletmen Yetkilendirmesi:** Kız belletmeni sadece Kız öğrencileri, Erkek belletmeni sadece Erkek öğrencileri görür. 107, 207, 307 numaralı odalar depo/idari alan olarak otomatik filtrelenir.
-- **İdare:** Tüm kız ve erkek öğrencileri, odaları ve yoklamaları yönetebilir. Excel ile toplu öğrenci yükleme desteği barındırır.
+## Logo
+Okul logosunu `public/logo.png` adıyla ekleyin (yoksa geçici `logo.svg` görünür).
+
+## Roller
+Yönetici tüm öğrencileri, kız bölümü belletmeni yalnızca kızları, erkek bölümü belletmeni yalnızca erkekleri görür. Veliler giriş yapmaz; `/veli` sayfasında telefon + WhatsApp kodu ile izin talep eder.
