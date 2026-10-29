@@ -17,3 +17,12 @@ CREATE TABLE parent_codes (
 CREATE INDEX parent_codes_phone_idx ON parent_codes(phone, created_at);
 CREATE INDEX students_mother_idx ON students(mother_phone);
 CREATE INDEX students_father_idx ON students(father_phone);
+
+CREATE TABLE wa_outbox (
+  id SERIAL PRIMARY KEY,
+  phone TEXT NOT NULL,
+  body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX wa_outbox_status_idx ON wa_outbox(status, id);
