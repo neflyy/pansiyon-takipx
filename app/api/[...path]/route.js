@@ -75,7 +75,7 @@ async function handle(req, { params }) {
 
     if (p === "students") {
       if ((e = need("bel", "yon"))) return e;
-      return J({ students: await sql`select * from students where (${sc}::text is null or gender = ${sc}) order by room, bed` });
+      return J({ students: await sql`select s.*, exists(select 1 from leaves l where l.student_id = s.id and now() between l.starts_at and l.ends_at) as on_leave from students s where (${sc}::text is null or s.gender = ${sc}) order by s.room, s.bed` });
     }
 
     if (p === "students/status" && post) {
@@ -105,6 +105,20 @@ async function handle(req, { params }) {
       return J({ added, errors });
     }
 
+    if (p === "students/delete" && post) {
+      if ((e = need("yon"))) return e;
+      await sql`delete from students where id = ${b.id}`;
+      await log(u.id, `ogrenci_silindi:${b.id}`);
+      return J({ ok: true });
+    }
+
+    if (p === "students/reset" && post) {
+      if ((e = need("yon"))) return e;
+      await sql`delete from students`;
+      await log(u.id, "ogrenciler_sifirlandi");
+      return J({ ok: true });
+    }
+
     if (p === "users") {
       if ((e = need("yon"))) return e;
       if (post) {
@@ -119,15 +133,38 @@ async function handle(req, { params }) {
 
     if (p === "attendance") {
       if ((e = need("bel", "yon"))) return e;
+      const sp = new URL(req.url).searchParams;
+      const pick = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d || "") ? d : today());
+      const at = (ses) => (ses === "yat" ? "22:00" : "19:30");
       if (post) {
-        if (!["etut", "yat"].includes(b.session) || !["var", "yok", "gec", "izinli"].includes(b.state)) return J({ error: "Geçersiz" }, 400);
-        if (!(await canSee(b.student_id))) return J({ error: "Yetkiniz yok" }, 403);
-        await sql`insert into attendance(student_id, day, session, state, taken_by) values (${b.student_id}, ${today()}, ${b.session}, ${b.state}, ${u.id})
-          on conflict (student_id, day, session) do update set state = ${b.state}, taken_by = ${u.id}`;
-        return J({ ok: true });
+        if (!["etut", "yat"].includes(b.session) || !["var", "yok", "gec"].includes(b.state)) return J({ error: "Geçersiz" }, 400);
+        const day = pick(b.day);
+        const [st] = await sql`select s.*, exists(select 1 from leaves l where l.student_id = s.id and ((${day}::date + ${at(b.session)}::time) at time zone 'Europe/Istanbul') between l.starts_at and l.ends_at) as on_leave from students s where s.id = ${b.student_id}`;
+        if (!st || (sc && st.gender !== sc)) return J({ error: "Yetkiniz yok" }, 403);
+        if (st.on_leave) return J({ error: "Öğrenci izinli, yoklama alınamaz" }, 409);
+        let nv = null, note = null;
+        if (b.state === "yok" && ["anne", "baba"].includes(b.notify)) {
+          const to = b.notify === "anne" ? st.mother_phone : st.father_phone;
+          const nm = b.notify === "anne" ? st.mother_name : st.father_name;
+          if (!to) return J({ error: `${b.notify === "anne" ? "Anne" : "Baba"} telefonu kayıtlı değil` }, 400);
+          const [ex] = await sql`select notified from attendance where student_id = ${st.id} and day = ${day} and session = ${b.session}`;
+          if (ex?.notified) note = "Bu seans için veliye zaten bildirim gönderilmişti";
+          else {
+            const dd = day.split("-").reverse().join(".");
+            const body = `Sayın Velimiz (${nm || st.full_name + " velisi"}),\n${st.full_name} adlı öğrenciniz ${dd} tarihli ${b.session === "yat" ? "yat" : "etüt"} yoklamasında mazeretsiz olarak katılmamıştır. Bilgilerinize sunarız.\nProf. Dr. Necmettin Erbakan Fen Lisesi Pansiyonu`;
+            await sql`insert into wa_outbox(phone, body) values (${to}, ${body})`;
+            nv = b.notify; note = "Veliye WhatsApp bildirimi gönderiliyor";
+          }
+        }
+        await sql`insert into attendance(student_id, day, session, state, taken_by, notified) values (${st.id}, ${day}, ${b.session}, ${b.state}, ${u.id}, ${nv})
+          on conflict (student_id, day, session) do update set state = ${b.state}, taken_by = ${u.id}, notified = coalesce(${nv}, attendance.notified)`;
+        return J({ ok: true, note });
       }
-      const s = new URL(req.url).searchParams.get("session") === "yat" ? "yat" : "etut";
-      return J({ day: today(), rows: await sql`select a.student_id, a.state from attendance a join students s on s.id = a.student_id where a.day = ${today()} and a.session = ${s} and (${sc}::text is null or s.gender = ${sc})` });
+      const ses = sp.get("session") === "yat" ? "yat" : "etut";
+      const day = pick(sp.get("day"));
+      const rows = await sql`select a.student_id, a.state, a.notified from attendance a join students s on s.id = a.student_id where a.day = ${day} and a.session = ${ses} and (${sc}::text is null or s.gender = ${sc})`;
+      const lv = await sql`select distinct l.student_id from leaves l join students s on s.id = l.student_id where ((${day}::date + ${at(ses)}::time) at time zone 'Europe/Istanbul') between l.starts_at and l.ends_at and (${sc}::text is null or s.gender = ${sc})`;
+      return J({ day, rows, onleave: lv.map((x) => x.student_id) });
     }
 
     if (p === "leaves") {
@@ -136,7 +173,6 @@ async function handle(req, { params }) {
         if (!b.student_id || !b.starts_at || !b.ends_at || !b.kind) return J({ error: "Tüm alanları doldurun" }, 400);
         if (!(await canSee(b.student_id))) return J({ error: "Yetkiniz yok" }, 403);
         await sql`insert into leaves(student_id, kind, starts_at, ends_at, reason, created_by) values (${b.student_id}, ${b.kind}, ${b.starts_at}, ${b.ends_at}, ${b.reason || null}, ${u.id})`;
-        await sql`update students set status = 'izinli' where id = ${b.student_id}`;
         await log(u.id, `izin:${b.student_id}`);
         return J({ ok: true });
       }
@@ -149,7 +185,8 @@ async function handle(req, { params }) {
       const [r] = await sql`select count(*)::int as n from parent_codes where phone = ${ph} and created_at > now() - interval '1 hour'`;
       if (r.n >= 5) return J({ error: "Çok fazla istek. Daha sonra tekrar deneyin." }, 429);
       const [k] = await sql`select full_name, mother_name, mother_phone, father_name from students where mother_phone = ${ph} or father_phone = ${ph} limit 1`;
-      if (k) {
+      if (!k) return J({ error: "Bu telefon numarası öğrenci kayıtlarında bulunamadı. Okul idaresiyle iletişime geçin." }, 404);
+      {
         const name = (k.mother_phone === ph ? k.mother_name : k.father_name) || `${k.full_name} velisi`;
         const code = String(randomInt(100000, 1000000));
         await sql`insert into parent_codes(phone, code_hash, expires_at) values (${ph}, ${hashCode(code)}, now() + interval '5 minutes')`;
@@ -179,7 +216,8 @@ async function handle(req, { params }) {
       if (!ph) return J({ error: "Doğrulama gerekli" }, 401);
       const students = await sql`select id, full_name, room, bed, status from students where mother_phone = ${ph} or father_phone = ${ph} order by full_name`;
       const leaves = await sql`select l.id, l.kind, l.starts_at, l.ends_at, s.full_name from leaves l join students s on s.id = l.student_id where s.mother_phone = ${ph} or s.father_phone = ${ph} order by l.starts_at desc limit 20`;
-      return J({ students, leaves });
+      const history = await sql`select a.day, a.session, a.state, s.full_name from attendance a join students s on s.id = a.student_id where s.mother_phone = ${ph} or s.father_phone = ${ph} order by a.day desc, a.session desc limit 40`;
+      return J({ students, leaves, history });
     }
 
     if (p === "veli/izin" && post) {
@@ -189,7 +227,6 @@ async function handle(req, { params }) {
       if (!s) return J({ error: "Bu öğrenci için yetkiniz yok" }, 403);
       if (!b.kind || !b.starts_at || !b.ends_at || new Date(b.ends_at) <= new Date(b.starts_at)) return J({ error: "Çıkış ve dönüş zamanını doğru girin" }, 400);
       await sql`insert into leaves(student_id, kind, starts_at, ends_at, reason, requested_by_phone) values (${s.id}, ${b.kind}, ${b.starts_at}, ${b.ends_at}, ${b.reason || null}, ${ph})`;
-      await sql`update students set status = 'izinli' where id = ${s.id}`;
       await log(null, `veli_izin:${s.id}`);
       return J({ ok: true });
     }
@@ -201,4 +238,3 @@ async function handle(req, { params }) {
   }
 }
 export { handle as GET, handle as POST };
-
