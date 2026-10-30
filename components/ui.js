@@ -15,7 +15,7 @@ export function Logo({ s = 56 }) {
   return <img src="/logo.png" onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = "/logo.svg"; }} alt="Okul logosu" width={s} height={s} />;
 }
 export function Footer() {
-  return (<footer className="foot"><span>© 2026 Prof. Dr. Necmettin Erbakan Fen Lisesi Pansiyonu</span><span>KVKK uyumludur · Tüm hakları saklıdır.</span></footer>);
+  return (<footer className="foot"><span>© 2026 Prof. Dr. Necmettin Erbakan Fen Lisesi Pansiyonu yönetim sistemi</span><span>KVKK uyumludur · Tüm hakları saklıdır.</span></footer>);
 }
 export function useAction() {
   const [msg, setMsg] = useState(null);
@@ -44,4 +44,3 @@ export function VeliLogin({ onDone }) {
       <button type="button" className="btn ghost" onClick={() => { setStep("phone"); setMsg(null); }}>Numarayı değiştir</button>
     </form>);
 }
-
