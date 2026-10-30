@@ -13,6 +13,23 @@ const phone10 = (s) => { const t = String(s || "").replace(/\D/g, "").slice(-10)
 const hashCode = (c) => createHash("sha256").update(c + process.env.JWT_SECRET).digest("hex");
 const gender = (g) => { const c = String(g || "").trim().charAt(0).toUpperCase(); return c === "K" ? "K" : c === "E" ? "E" : null; };
 
+const pickDay = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d || "") ? d : today());
+const atTime = (ses) => (ses === "yat" ? "22:00" : "19:30");
+const slug = (t) => t.toLowerCase().replace(/\u0307/g, "").replace(/ç/g, "c").replace(/ğ/g, "g").replace(/ı/g, "i").replace(/ö/g, "o").replace(/ş/g, "s").replace(/ü/g, "u").replace(/[^a-z0-9]+/g, ".").replace(/^\.|\.$/g, "");
+
+async function insertStudent(o) {
+  const m = o.mp ? phone10(o.mp) : null, f = o.fp ? phone10(o.fp) : null, g = gender(o.g);
+  if (o.mp && !m) return "Anne telefonu geçersiz";
+  if (o.fp && !f) return "Baba telefonu geçersiz";
+  if (!o.name || !g) return "Ad soyad ve pansiyon (kız/erkek) gerekli";
+  const room = +o.room;
+  if (!roomOk(room)) return "Oda 101–315 arasında olmalı (107, 207, 307 yok)";
+  let bed = +o.bed;
+  if (!(bed >= 1 && bed <= 4)) { const [c] = await sql`select count(*)::int as n from students where room = ${room}`; bed = Math.min(4, c.n + 1); }
+  await sql`insert into students(full_name, room, bed, gender, mother_name, mother_phone, father_name, father_phone) values (${o.name.trim()}, ${room}, ${bed}, ${g}, ${o.mn || null}, ${m}, ${o.fn || null}, ${f})`;
+  return null;
+}
+
 async function sendWa(to10, name, code) {
   const body = `Sayın Velimiz (${name}),\nVeli Portalı Giriş Şifreniz: *${code}*\nGüvenliğiniz için bu kodu kimseyle paylaşmayınız.`;
   await sql`insert into wa_outbox(phone, body) values (${to10}, ${body})`;
@@ -92,17 +109,26 @@ async function handle(req, { params }) {
       let added = 0; const errors = [];
       const lines = String(b.text || "").split("\n").map((l) => l.trim()).filter(Boolean);
       for (const [i, line] of lines.entries()) {
-        const [name, room, bed, g, mn, mp, fn, fp] = line.split(";").map((s) => s.trim());
-        const m = phone10(mp), f = phone10(fp), gg = gender(g);
-        if (!name || !roomOk(+room) || !(+bed >= 1 && +bed <= 4) || !gg || (!m && !f)) {
-          errors.push(`Satır ${i + 1}: "${line}" geçersiz (oda 101–315, 107/207/307 yok; yatak 1–4; cinsiyet K/E; en az bir geçerli veli telefonu)`);
-          continue;
-        }
-        await sql`insert into students(full_name, room, bed, gender, mother_name, mother_phone, father_name, father_phone) values (${name}, ${+room}, ${+bed}, ${gg}, ${mn || null}, ${m}, ${fn || null}, ${f})`;
-        added++;
+        const x = line.split(/\t|;|\|/).map((t) => t.trim());
+        if (/^ad\s*soyad/i.test(x[0])) continue;
+        let o;
+        if (/^[kKeE]/.test(x[1] || "") && !/^\d/.test(x[1] || "")) {
+          const kat = +x[2], oda = +x[3];
+          o = { name: x[0], g: x[1], room: oda >= 100 ? oda : kat * 100 + oda, mn: x[4], mp: x[5], fn: x[6], fp: x[7] };
+        } else o = { name: x[0], room: x[1], bed: x[2], g: x[3], mn: x[4], mp: x[5], fn: x[6], fp: x[7] };
+        const err = await insertStudent(o);
+        if (err) errors.push(`Satır ${i + 1}: ${err} → "${line}"`); else added++;
       }
       await log(u.id, `import:${added}`);
       return J({ added, errors });
+    }
+
+    if (p === "students/add" && post) {
+      if ((e = need("yon"))) return e;
+      const err = await insertStudent({ name: b.full_name, g: b.gender, room: b.room, bed: b.bed, mn: b.mother_name, mp: b.mother_phone, fn: b.father_name, fp: b.father_phone });
+      if (err) return J({ error: err }, 400);
+      await log(u.id, `ogrenci_eklendi:${b.full_name}`);
+      return J({ ok: true });
     }
 
     if (p === "students/delete" && post) {
@@ -122,48 +148,117 @@ async function handle(req, { params }) {
     if (p === "users") {
       if ((e = need("yon"))) return e;
       if (post) {
-        if (!b.full_name || !b.username || !["K", "E"].includes(b.scope)) return J({ error: "Ad, kullanıcı adı ve kız/erkek bölümü gerekli" }, 400);
-        const pw = tempPw(); const { salt, hash } = hashPw(pw);
-        await sql`insert into users(role, scope, username, full_name, salt, hash) values ('bel', ${b.scope}, ${b.username.trim().toLowerCase()}, ${b.full_name.trim()}, ${salt}, ${hash})`;
-        await log(u.id, `belletmen:${b.username}`);
-        return J({ username: b.username.trim().toLowerCase(), password: pw });
+        if (!b.full_name || !["K", "E"].includes(b.scope)) return J({ error: "Ad soyad ve görev bloğu gerekli" }, 400);
+        const explicit = (b.username || "").trim().toLowerCase();
+        let un = explicit || slug(b.full_name);
+        if (!un) return J({ error: "Kullanıcı adı üretilemedi" }, 400);
+        const [dupe] = await sql`select 1 as x from users where lower(username) = ${un}`;
+        if (dupe) { if (explicit) return J({ error: "Bu kullanıcı adı kullanılıyor" }, 409); un += Math.floor(10 + Math.random() * 90); }
+        if (b.password && !strong(b.password)) return J({ error: "Şifre en az 8 karakter, harf ve rakam içermeli" }, 400);
+        const pw = b.password || tempPw(); const { salt, hash } = hashPw(pw);
+        await sql`insert into users(role, scope, username, full_name, branch, phone, salt, hash) values ('bel', ${b.scope}, ${un}, ${b.full_name.trim()}, ${b.branch || null}, ${b.phone || null}, ${salt}, ${hash})`;
+        await log(u.id, `belletmen:${un}`);
+        return J({ username: un, password: pw });
       }
-      return J({ users: await sql`select id, role, scope, username, full_name, must_change from users where role <> 'veli' order by id` });
+      return J({ users: await sql`select id, role, scope, username, full_name, branch, phone, must_change from users where role <> 'veli' order by id` });
+    }
+
+    if (p === "users/update" && post) {
+      if ((e = need("yon"))) return e;
+      if (!b.full_name || !["K", "E"].includes(b.scope)) return J({ error: "Ad soyad ve görev bloğu gerekli" }, 400);
+      await sql`update users set full_name = ${b.full_name.trim()}, scope = ${b.scope}, branch = ${b.branch || null}, phone = ${b.phone || null} where id = ${b.id} and role = 'bel'`;
+      await log(u.id, `belletmen_guncellendi:${b.id}`);
+      return J({ ok: true });
+    }
+
+    if (p === "users/reset" && post) {
+      if ((e = need("yon"))) return e;
+      if (b.password && !strong(b.password)) return J({ error: "Şifre en az 8 karakter, harf ve rakam içermeli" }, 400);
+      const pw = b.password || tempPw(); const { salt, hash } = hashPw(pw);
+      const [x] = await sql`update users set salt = ${salt}, hash = ${hash}, must_change = true where id = ${b.id} and role = 'bel' returning username`;
+      if (!x) return J({ error: "Kullanıcı bulunamadı" }, 404);
+      await sql`delete from login_attempts where ident = ${String(x.username).toLowerCase()}`;
+      await log(u.id, `sifre_sifirlandi:${x.username}`);
+      return J({ username: x.username, password: pw });
+    }
+
+    if (p === "users/delete" && post) {
+      if ((e = need("yon"))) return e;
+      await sql`update attendance set taken_by = null where taken_by = ${b.id}`;
+      await sql`update leaves set created_by = null where created_by = ${b.id}`;
+      await sql`update audit_log set user_id = null where user_id = ${b.id}`;
+      await sql`update duty_log set created_by = null where created_by = ${b.id}`;
+      await sql`delete from users where id = ${b.id} and role = 'bel'`;
+      await log(u.id, `belletmen_silindi:${b.id}`);
+      return J({ ok: true });
+    }
+
+    if (p === "logs") {
+      if ((e = need("yon"))) return e;
+      return J({ logs: await sql`select a.id, a.created_at, a.action, u.full_name from audit_log a left join users u on u.id = a.user_id order by a.id desc limit 200` });
+    }
+
+    if (p === "duty") {
+      if ((e = need("bel", "yon"))) return e;
+      if (post) {
+        const day = pickDay(b.day), ses = b.session === "yat" ? "yat" : "etut";
+        if (b.id) await sql`update duty_log set day = ${day}, session = ${ses}, male_duty = ${b.male_duty || null}, female_duty = ${b.female_duty || null}, notes = ${b.notes || null} where id = ${b.id}`;
+        else await sql`insert into duty_log(day, session, male_duty, female_duty, notes, created_by) values (${day}, ${ses}, ${b.male_duty || null}, ${b.female_duty || null}, ${b.notes || null}, ${u.id})`;
+        await log(u.id, "nobet_defteri");
+        return J({ ok: true });
+      }
+      return J({ duty: await sql`select id, to_char(day, 'YYYY-MM-DD') as day, session, male_duty, female_duty, notes from duty_log order by duty_log.day desc, id desc limit 100` });
+    }
+
+    if (p === "duty/delete" && post) {
+      if ((e = need("yon"))) return e;
+      await sql`delete from duty_log where id = ${b.id}`;
+      await log(u.id, `nobet_silindi:${b.id}`);
+      return J({ ok: true });
+    }
+
+    if (p === "attendance/notify" && post) {
+      if ((e = need("bel", "yon"))) return e;
+      const day = pickDay(b.day), ses = b.session === "yat" ? "yat" : "etut";
+      if (!["anne", "baba"].includes(b.who)) return J({ error: "Geçersiz" }, 400);
+      const [st] = await sql`select s.*, exists(select 1 from leaves l where l.student_id = s.id and ((${day}::date + ${atTime(ses)}::time) at time zone 'Europe/Istanbul') between l.starts_at and l.ends_at) as on_leave from students s where s.id = ${b.student_id}`;
+      if (!st || (sc && st.gender !== sc)) return J({ error: "Yetkiniz yok" }, 403);
+      if (st.on_leave) return J({ error: "Öğrenci izinli" }, 409);
+      const to = b.who === "anne" ? st.mother_phone : st.father_phone;
+      const nm = b.who === "anne" ? st.mother_name : st.father_name;
+      if (!to) return J({ error: `${b.who === "anne" ? "Anne" : "Baba"} telefonu kayıtlı değil` }, 400);
+      const [ex] = await sql`select notified from attendance where student_id = ${st.id} and day = ${day} and session = ${ses}`;
+      if (ex?.notified === b.who) return J({ ok: true, note: "Bu seans için zaten gönderilmişti" });
+      const dd = day.split("-").reverse().join(".");
+      const body = `Sayın Velimiz (${nm || st.full_name + " velisi"}),\n${st.full_name} adlı öğrenciniz ${dd} tarihli ${ses === "yat" ? "yat" : "etüt"} yoklamasında mazeretsiz olarak katılmamıştır. Bilgilerinize sunarız.\nProf. Dr. Necmettin Erbakan Fen Lisesi Pansiyonu`;
+      await sql`insert into wa_outbox(phone, body) values (${to}, ${body})`;
+      await log(u.id, `bildirim:${st.full_name}:${b.who}`);
+      return J({ ok: true });
     }
 
     if (p === "attendance") {
       if ((e = need("bel", "yon"))) return e;
-      const sp = new URL(req.url).searchParams;
-      const pick = (d) => (/^\d{4}-\d{2}-\d{2}$/.test(d || "") ? d : today());
-      const at = (ses) => (ses === "yat" ? "22:00" : "19:30");
       if (post) {
-        if (!["etut", "yat"].includes(b.session) || !["var", "yok", "gec"].includes(b.state)) return J({ error: "Geçersiz" }, 400);
-        const day = pick(b.day);
-        const [st] = await sql`select s.*, exists(select 1 from leaves l where l.student_id = s.id and ((${day}::date + ${at(b.session)}::time) at time zone 'Europe/Istanbul') between l.starts_at and l.ends_at) as on_leave from students s where s.id = ${b.student_id}`;
-        if (!st || (sc && st.gender !== sc)) return J({ error: "Yetkiniz yok" }, 403);
-        if (st.on_leave) return J({ error: "Öğrenci izinli, yoklama alınamaz" }, 409);
-        let nv = null, note = null;
-        if (b.state === "yok" && ["anne", "baba"].includes(b.notify)) {
-          const to = b.notify === "anne" ? st.mother_phone : st.father_phone;
-          const nm = b.notify === "anne" ? st.mother_name : st.father_name;
-          if (!to) return J({ error: `${b.notify === "anne" ? "Anne" : "Baba"} telefonu kayıtlı değil` }, 400);
-          const [ex] = await sql`select notified from attendance where student_id = ${st.id} and day = ${day} and session = ${b.session}`;
-          if (ex?.notified) note = "Bu seans için veliye zaten bildirim gönderilmişti";
-          else {
-            const dd = day.split("-").reverse().join(".");
-            const body = `Sayın Velimiz (${nm || st.full_name + " velisi"}),\n${st.full_name} adlı öğrenciniz ${dd} tarihli ${b.session === "yat" ? "yat" : "etüt"} yoklamasında mazeretsiz olarak katılmamıştır. Bilgilerinize sunarız.\nProf. Dr. Necmettin Erbakan Fen Lisesi Pansiyonu`;
-            await sql`insert into wa_outbox(phone, body) values (${to}, ${body})`;
-            nv = b.notify; note = "Veliye WhatsApp bildirimi gönderiliyor";
-          }
+        const day = pickDay(b.day), ses = b.session === "yat" ? "yat" : "etut";
+        const items = Array.isArray(b.items) ? b.items.slice(0, 400) : [];
+        const ids = items.map((i) => +i.student_id).filter(Number.isInteger);
+        const okRows = ids.length ? await sql`select s.id from students s where s.id = any(${ids}::int[]) and (${sc}::text is null or s.gender = ${sc}) and not exists (select 1 from leaves l where l.student_id = s.id and ((${day}::date + ${atTime(ses)}::time) at time zone 'Europe/Istanbul') between l.starts_at and l.ends_at)` : [];
+        const ok = new Set(okRows.map((r) => r.id));
+        const rows = items.filter((i) => ok.has(+i.student_id) && ["var", "yok"].includes(i.state));
+        if (rows.length) {
+          const sids = rows.map((i) => +i.student_id), sts = rows.map((i) => i.state), nts = rows.map((i) => (["anne", "baba"].includes(i.notified) ? i.notified : null));
+          await sql`insert into attendance(student_id, day, session, state, taken_by, notified)
+            select x.sid, ${day}::date, ${ses}, x.st, ${u.id}, x.nt from unnest(${sids}::int[], ${sts}::text[], ${nts}::text[]) as x(sid, st, nt)
+            on conflict (student_id, day, session) do update set state = excluded.state, taken_by = excluded.taken_by, notified = coalesce(excluded.notified, attendance.notified)`;
         }
-        await sql`insert into attendance(student_id, day, session, state, taken_by, notified) values (${st.id}, ${day}, ${b.session}, ${b.state}, ${u.id}, ${nv})
-          on conflict (student_id, day, session) do update set state = ${b.state}, taken_by = ${u.id}, notified = coalesce(${nv}, attendance.notified)`;
-        return J({ ok: true, note });
+        await log(u.id, `yoklama:${day}:${ses}:${rows.length}`);
+        return J({ ok: true, saved: rows.length });
       }
+      const sp = new URL(req.url).searchParams;
       const ses = sp.get("session") === "yat" ? "yat" : "etut";
-      const day = pick(sp.get("day"));
+      const day = pickDay(sp.get("day"));
       const rows = await sql`select a.student_id, a.state, a.notified from attendance a join students s on s.id = a.student_id where a.day = ${day} and a.session = ${ses} and (${sc}::text is null or s.gender = ${sc})`;
-      const lv = await sql`select distinct l.student_id from leaves l join students s on s.id = l.student_id where ((${day}::date + ${at(ses)}::time) at time zone 'Europe/Istanbul') between l.starts_at and l.ends_at and (${sc}::text is null or s.gender = ${sc})`;
+      const lv = await sql`select distinct l.student_id from leaves l join students s on s.id = l.student_id where ((${day}::date + ${atTime(ses)}::time) at time zone 'Europe/Istanbul') between l.starts_at and l.ends_at and (${sc}::text is null or s.gender = ${sc})`;
       return J({ day, rows, onleave: lv.map((x) => x.student_id) });
     }
 
@@ -216,7 +311,7 @@ async function handle(req, { params }) {
       if (!ph) return J({ error: "Doğrulama gerekli" }, 401);
       const students = await sql`select id, full_name, room, bed, status from students where mother_phone = ${ph} or father_phone = ${ph} order by full_name`;
       const leaves = await sql`select l.id, l.kind, l.starts_at, l.ends_at, s.full_name from leaves l join students s on s.id = l.student_id where s.mother_phone = ${ph} or s.father_phone = ${ph} order by l.starts_at desc limit 20`;
-      const history = await sql`select a.day, a.session, a.state, s.full_name from attendance a join students s on s.id = a.student_id where s.mother_phone = ${ph} or s.father_phone = ${ph} order by a.day desc, a.session desc limit 40`;
+      const history = await sql`select to_char(a.day, 'YYYY-MM-DD') as day, a.session, a.state, s.full_name from attendance a join students s on s.id = a.student_id where s.mother_phone = ${ph} or s.father_phone = ${ph} order by a.day desc, a.session desc limit 40`;
       return J({ students, leaves, history });
     }
 
