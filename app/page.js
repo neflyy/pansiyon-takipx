@@ -28,7 +28,7 @@ function Gate({ setup, onDone }) {
   const go = (e) => { e.preventDefault(); run(async () => { await api(setup ? "setup" : "login", f); onDone(); }); };
   const R = [["veli", "👨‍👩‍👧", "Veli Girişi", "Cep telefonu ile"], ["bel", "🧑‍🏫", "Belletmen", "Kullanıcı adı ile"], ["yon", "🛡️", "Yönetici", "İdare paneli"]];
   return (
-    <div className="gate">
+    <div className="gate login">
       <header className="gh"><Logo s={46} /><div><small>PROF. DR. NECMETTİN ERBAKAN</small><b>FEN LİSESİ</b><span>Pansiyon ve Yurt Bilgi Sistemi</span></div></header>
       <main className="gm"><section className="split">
         <aside className="side"><div className="lgbox"><Logo s={120} /></div><small>PROF. DR. NECMETTİN ERBAKAN</small><h1>FEN LİSESİ</h1><p>Pansiyon ve Yurt Bilgi Sistemi</p></aside>
