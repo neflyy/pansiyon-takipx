@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { api, todayStr, fmt, fmtPhone, Logo, Footer, VeliLogin, useAction } from "@/components/ui";
+import { api, todayStr, fmt, fmtPhone, Logo, Footer, VeliLogin, Loader, useAction } from "@/components/ui";
 
 const ST = { yurtta: "Yurtta", etutte: "Etütte", revir: "Revirde" };
 const SES = { etut: "1. Etüt Yoklaması (19:30)", yat: "Gece Yat Yoklaması (22:00)" };
@@ -25,13 +25,15 @@ const ROLE = { yon: "Yönetici", bel: "Belletmen" };
 function Gate({ setup, onDone }) {
   const [role, setRole] = useState("veli"); const [f, setF] = useState({}); const [run, box] = useAction();
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  const go = (e) => { e.preventDefault(); run(async () => { await api(setup ? "setup" : "login", f); onDone(); }); };
+  const go = (e) => { e.preventDefault(); run(async () => { await api(setup ? "setup" : "login", !setup && role === "yon" ? { role: "yon", password: f.password } : f); onDone(); }); };
   const R = [["veli", "👨‍👩‍👧", "Veli Girişi", "Cep telefonu ile"], ["bel", "🧑‍🏫", "Belletmen", "Kullanıcı adı ile"], ["yon", "🛡️", "Yönetici", "İdare paneli"]];
   return (
     <div className="gate login">
       <header className="gh"><Logo s={46} /><div><small>PROF. DR. NECMETTİN ERBAKAN</small><b>FEN LİSESİ</b><span>Pansiyon ve Yurt Bilgi Sistemi</span></div></header>
-      <main className="gm"><section className="split">
-        <aside className="side"><div className="lgbox"><Logo s={120} /></div><small>PROF. DR. NECMETTİN ERBAKAN</small><h1>FEN LİSESİ</h1><p>Pansiyon ve Yurt Bilgi Sistemi</p></aside>
+      <main className="gm">
+        <div className="deco" aria-hidden="true">{[["📚", "7%", "12%", "0s"], ["🎓", "86%", "9%", "1.2s"], ["✏️", "4%", "66%", "2.1s"], ["🔬", "90%", "60%", "0.6s"], ["💡", "44%", "4%", "1.8s"], ["📐", "22%", "87%", "2.6s"], ["🧪", "74%", "86%", "0.9s"], ["🌍", "63%", "5%", "3s"]].map(([e, l, t, d], i) => <span key={i} style={{ left: l, top: t, animationDelay: d }}>{e}</span>)}</div>
+        <section className="split">
+        <aside className="side"><div className="lgbox"><Logo s={120} /></div><small>PROF. DR. NECMETTİN ERBAKAN</small><h1>FEN LİSESİ</h1><p>Pansiyon ve Yurt Bilgi Sistemi</p><div className="motto">BİLİM • EĞİTİM • GELECEK</div></aside>
         <div className="pane">
           {setup ? (<>
             <h2>İlk Kurulum</h2><p className="hint">Yönetici hesabını oluşturun.</p>
@@ -46,8 +48,9 @@ function Gate({ setup, onDone }) {
               <button key={k} type="button" className={"role" + (role === k ? " on" : "")} onClick={() => setRole(k)}><span className="ic">{i}</span><b>{t}</b><small>{s}</small></button>))}</div>
             {role === "veli" ? <VeliLogin onDone={() => { window.location.href = "/veli"; }} /> : (
               <form key={role} onSubmit={go}>
-                <label>Kullanıcı adı</label><input onChange={set("ident")} autoComplete="username" required />
-                <label>Şifre</label><input type="password" onChange={set("password")} autoComplete="current-password" required />
+                {role === "bel" && (<><label>Kullanıcı adı</label><input onChange={set("ident")} autoComplete="username" required /></>)}
+                <label>{role === "yon" ? "Yönetici şifresi" : "Şifre"}</label>
+                <input type="password" className={role === "yon" ? "big" : undefined} onChange={set("password")} autoComplete="current-password" required />
                 {box}<button className="btn">Giriş Yap</button>
               </form>)}
           </>)}
@@ -320,7 +323,7 @@ export default function Home() {
   }, []);
   useEffect(() => { boot(); }, [boot]);
   const refresh = async () => { await boot(); setTick((t) => t + 1); };
-  if (!st) return <main className="wrap">Yükleniyor…</main>;
+  if (!st) return <Loader />;
   if (!st.user) return <Gate setup={st.setup} onDone={boot} />;
   if (st.user.must_change) return <ChangePw onDone={boot} />;
   const me = st.user; const n = students.length; const lv = students.filter((s) => s.on_leave).length;
