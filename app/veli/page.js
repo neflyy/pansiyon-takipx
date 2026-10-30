@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { api, fmt, Logo, Footer, VeliLogin, useAction } from "@/components/ui";
+import { api, fmt, Logo, Footer, VeliLogin, Loader, useAction } from "@/components/ui";
 
 const AT = { var: "Yurtta", yok: "Katılmadı", gec: "Geç" };
 const AC = { var: "green", yok: "orange", gec: "orange" };
@@ -15,7 +15,7 @@ export default function Veli() {
       <header className="ph"><div className="pl"><Logo s={46} /><div><small>VELİ PORTALI</small><b>Prof. Dr. Necmettin Erbakan Fen Lisesi Pansiyonu</b></div></div>
         <div className="pr">{data ? <button className="btn red sm" onClick={async () => { await api("veli/cikis", {}); setData(false); }}>Çıkış</button> : <a className="btn ghost sm" href="/">Ana sayfa</a>}</div></header>
       <main className="wrap" style={{ maxWidth: 720 }}>
-        {data === null && "Yükleniyor…"}
+        {data === null && <Loader compact />}
         {data === false && (<div className="card" style={{ maxWidth: 440, margin: "6vh auto 0" }}><h2>Veli Girişi</h2><VeliLogin onDone={load} /></div>)}
         {data && (<>
           {data.students.map((s) => <div className="card" key={s.id}><h3>{s.full_name}</h3>Oda {s.room} · {s.bed}. yatak</div>)}
