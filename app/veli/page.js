@@ -33,7 +33,7 @@ export default function Veli() {
             {data.leaves.map((l) => <div className="stu" key={l.id}><div className="n">{l.full_name}<small>{l.kind} · {fmt(l.starts_at)} – {fmt(l.ends_at)}</small></div></div>)}</div>)}
           <div className="card"><h3>Yoklama geçmişi</h3>
             {data.history.length === 0 ? "Henüz yoklama kaydı yok." : (<div className="tw"><table className="tbl"><thead><tr><th>Tarih</th><th>Öğrenci</th><th>Yoklama</th><th>Durum</th></tr></thead>
-              <tbody>{data.history.map((h, i) => (<tr key={i}><td>{new Date(h.day).toLocaleDateString("tr-TR")}</td><td>{h.full_name}</td><td>{h.session === "yat" ? "Yatış" : "Etüt"}</td><td><span className={"dot " + AC[h.state]}>{AT[h.state]}</span></td></tr>))}</tbody></table></div>)}
+              <tbody>{data.history.map((h, i) => (<tr key={i}><td>{h.day.split("-").reverse().join(".")}</td><td>{h.full_name}</td><td>{h.session === "yat" ? "Yatış" : "Etüt"}</td><td><span className={"dot " + AC[h.state]}>{AT[h.state]}</span></td></tr>))}</tbody></table></div>)}
           </div>
         </>)}
       </main>
