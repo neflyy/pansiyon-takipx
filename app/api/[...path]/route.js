@@ -63,15 +63,24 @@ async function handle(req, { params }) {
     }
 
     if (p === "login" && post) {
-      const id = String(b.ident || "").trim().toLowerCase();
-      const [a] = await sql`select * from login_attempts where ident = ${id}`;
-      if (a?.locked_until && new Date(a.locked_until) > new Date()) return J({ error: "Çok fazla deneme. 5 dakika bekleyin." }, 429);
-      const [x] = await sql`select * from users where lower(username) = ${id} and role <> 'veli'`;
-      if (!x || !checkPw(String(b.password || ""), x.salt, x.hash)) {
+      const asAdmin = b.role === "yon";
+      const id = asAdmin ? "__yonetici" : String(b.ident || "").trim().toLowerCase();
+      const [att] = await sql`select * from login_attempts where ident = ${id}`;
+      if (att?.locked_until && new Date(att.locked_until) > new Date()) return J({ error: "Çok fazla deneme. 5 dakika bekleyin." }, 429);
+      const pw = String(b.password || "");
+      let x = null;
+      if (asAdmin) {
+        const admins = await sql`select * from users where role = 'yon'`;
+        x = admins.find((a2) => checkPw(pw, a2.salt, a2.hash)) || null;
+      } else {
+        const [c] = await sql`select * from users where lower(username) = ${id} and role <> 'veli'`;
+        x = c && checkPw(pw, c.salt, c.hash) ? c : null;
+      }
+      if (!x) {
         await sql`insert into login_attempts(ident, fails) values (${id}, 1)
           on conflict (ident) do update set fails = login_attempts.fails + 1,
           locked_until = case when login_attempts.fails + 1 >= 5 then now() + interval '5 minutes' else null end`;
-        return J({ error: "Kullanıcı adı veya şifre hatalı" }, 401);
+        return J({ error: asAdmin ? "Şifre hatalı" : "Kullanıcı adı veya şifre hatalı" }, 401);
       }
       await sql`delete from login_attempts where ident = ${id}`;
       await setSession(x.id);
