@@ -18,3 +18,6 @@ Yönetici tüm öğrencileri, kız bölümü belletmeni yalnızca kızları, erk
 
 ## Güncelleme notu
 Mevcut veritabanında `guncelleme.sql` dosyasını (Neon > SQL Editor) bir kez çalıştırın.
+
+## Son güncelleme
+`guncelleme.sql` dosyasını Neon > SQL Editor'da çalıştırın (nöbet defteri tablosu ve belletmen branş sütunu eklenir). Excel yükleme için `xlsx` paketi eklendi; Vercel derlemede otomatik kurar.

@@ -6,6 +6,7 @@ CREATE TABLE users (
   full_name TEXT NOT NULL,
   tc TEXT UNIQUE,
   phone TEXT,
+  branch TEXT,
   salt TEXT NOT NULL,
   hash TEXT NOT NULL,
   must_change BOOLEAN NOT NULL DEFAULT TRUE,
@@ -83,3 +84,14 @@ CREATE TABLE wa_outbox (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX wa_outbox_status_idx ON wa_outbox(status, id);
+
+CREATE TABLE duty_log (
+  id SERIAL PRIMARY KEY,
+  day DATE NOT NULL,
+  session TEXT NOT NULL CHECK (session IN ('etut','yat')),
+  male_duty TEXT,
+  female_duty TEXT,
+  notes TEXT,
+  created_by INT REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
