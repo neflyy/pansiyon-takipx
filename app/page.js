@@ -3,6 +3,23 @@ import { useEffect, useMemo, useState, useCallback } from "react";
 import { api, todayStr, fmt, fmtPhone, Logo, Footer, VeliLogin, useAction } from "@/components/ui";
 
 const ST = { yurtta: "Yurtta", etutte: "Etütte", revir: "Revirde" };
+const SES = { etut: "1. Etüt Yoklaması (19:30)", yat: "Gece Yat Yoklaması (22:00)" };
+const dmy = (d) => String(d).slice(0, 10).split("-").reverse().join(".");
+const logText = (a) => {
+  const [k, ...r] = a.split(":");
+  const who = { anne: "anneye", baba: "babaya" };
+  const M = {
+    giris: () => "Sisteme giriş yaptı", sifre_degisti: () => "Şifresini değiştirdi", ogrenciler_sifirlandi: () => "Tüm öğrencileri sıfırladı",
+    nobet_defteri: () => "Nöbet defterine kayıt ekledi/düzenledi", nobet_silindi: () => "Nöbet defteri kaydını sildi",
+    import: () => `${r[0]} öğrenci içe aktardı`, ogrenci_eklendi: () => `Öğrenci ekledi: ${r.join(":")}`, ogrenci_silindi: () => "Öğrenci sildi",
+    durum: () => "Öğrenci durumunu değiştirdi", izin: () => "İzin kaydetti", veli_izin: () => "Veli izin talebi oluşturdu",
+    veli_giris: () => `Veli girişi (…${r[0]})`, belletmen: () => `Belletmen hesabı oluşturdu: ${r[0]}`, belletmen_guncellendi: () => "Belletmen bilgilerini güncelledi",
+    sifre_sifirlandi: () => `Belletmen şifresini sıfırladı: ${r[0]}`, belletmen_silindi: () => "Belletmen hesabını sildi",
+    yoklama: () => `${dmy(r[0])} ${r[1] === "yat" ? "yat" : "etüt"} yoklamasını kaydetti (${r[2]} öğrenci)`,
+    bildirim: () => `${r[0]} için ${who[r[1]] || ""} devamsızlık mesajı gönderdi`,
+  };
+  return (M[k] || (() => a))();
+};
 const ROLE = { yon: "Yönetici", bel: "Belletmen" };
 
 function Gate({ setup, onDone }) {
@@ -55,86 +72,208 @@ function ChangePw({ onDone }) {
 
 function Attendance({ students, tick }) {
   const [session, setSession] = useState("etut"); const [day, setDay] = useState(todayStr());
-  const [map, setMap] = useState({}); const [leave, setLeave] = useState(new Set());
-  const [floor, setFloor] = useState("all"); const [q, setQ] = useState(""); const [ask, setAsk] = useState(null);
+  const [map, setMap] = useState({}); const [orig, setOrig] = useState("{}"); const [notified, setNotified] = useState({}); const [leave, setLeave] = useState(new Set());
+  const [floor, setFloor] = useState("all"); const [q, setQ] = useState("");
   const [run, box, setMsg] = useAction();
-  useEffect(() => {
-    api(`attendance?session=${session}&day=${day}`).then((d) => { setMap(Object.fromEntries(d.rows.map((r) => [r.student_id, r.state]))); setLeave(new Set(d.onleave)); }).catch(() => {});
-  }, [session, day, tick]);
-  const mark = (s, state, notify) => run(async () => {
-    const r = await api("attendance", { student_id: s.id, session, day, state, notify });
-    setMap((m) => ({ ...m, [s.id]: state }));
-    if (r.note) setMsg({ ok: r.note });
+  const dirty = JSON.stringify(map) !== orig;
+  const load = useCallback(() => api(`attendance?session=${session}&day=${day}`).then((d) => {
+    const m = Object.fromEntries(d.rows.map((r) => [r.student_id, r.state]));
+    setMap(m); setOrig(JSON.stringify(m));
+    setNotified(Object.fromEntries(d.rows.filter((r) => r.notified).map((r) => [r.student_id, r.notified])));
+    setLeave(new Set(d.onleave));
+  }).catch(() => {}), [session, day]);
+  useEffect(() => { load(); }, [load, tick]);
+  const guard = (fn) => { if (dirty && !confirm("Kaydedilmemiş yoklama değişiklikleri var. Silinsin mi?")) return; fn(); };
+  const pick = (s, st) => setMap((m) => { const n = { ...m }; if (n[s.id] === st) delete n[s.id]; else n[s.id] = st; return n; });
+  const notify = (s, who) => run(async () => {
+    await api("attendance/notify", { student_id: s.id, session, day, who });
+    setNotified((n) => ({ ...n, [s.id]: who }));
+    setMsg({ ok: `${s.full_name}: ${who === "anne" ? "anneye" : "babaya"} mesaj gönderiliyor` });
   });
+  const active = students.filter((s) => !leave.has(s.id));
+  const save = () => {
+    const marked = active.filter((s) => map[s.id]); const missing = active.length - marked.length;
+    if (missing > 0 && !confirm(`${missing} öğrenci için işaretleme yapılmadı. Yine de kaydedilsin mi?`)) return;
+    run(async () => {
+      await api("attendance", { session, day, items: marked.map((s) => ({ student_id: s.id, state: map[s.id], notified: notified[s.id] || null })) });
+      setOrig(JSON.stringify(map));
+    }, "Yoklama kaydedildi ve veli geçmişine işlendi.");
+  };
   const floors = useMemo(() => [...new Set(students.map((s) => Math.floor(s.room / 100)))].sort(), [students]);
   const list = students.filter((s) => (floor === "all" || Math.floor(s.room / 100) === floor) && (s.full_name + s.room).toLowerCase().includes(q.toLowerCase()));
-  const onL = students.filter((s) => leave.has(s.id));
-  const count = (k) => students.filter((s) => !leave.has(s.id) && map[s.id] === k).length;
-  const send = (who) => { const s = ask; setAsk(null); mark(s, "yok", who); };
+  const count = (k) => active.filter((s) => map[s.id] === k).length;
   return (<>
     <div className="stats">
       <div className="stat blue"><small>Toplam Öğrenci</small><b>{students.length}</b></div>
       <div className="stat green"><small>Yurtta (Var)</small><b>{count("var")}</b></div>
       <div className="stat orange"><small>Yoklamada Yok</small><b>{count("yok")}</b></div>
-      <div className="stat red"><small>İzinli</small><b>{onL.length}</b></div>
+      <div className="stat red"><small>İzinli</small><b>{students.length - active.length}</b></div>
     </div>
     <div className="card"><div className="bar">
-      <label className="inl">Yoklama Seansı:<input type="date" value={day} onChange={(e) => setDay(e.target.value || todayStr())} /></label>
-      <select value={session} onChange={(e) => setSession(e.target.value)} aria-label="Yoklama türü"><option value="etut">1. Etüt Yoklaması (19:30)</option><option value="yat">Yatış Yoklaması (22:00)</option></select>
-    </div>{box}</div>
+      <label className="inl">Yoklama Seansı:<input type="date" value={day} onChange={(e) => { const v = e.target.value || todayStr(); guard(() => setDay(v)); }} /></label>
+      <select value={session} onChange={(e) => { const v = e.target.value; guard(() => setSession(v)); }} aria-label="Yoklama türü">{Object.entries(SES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+      <button className="btn green" style={{ margin: 0, flex: "0 1 auto" }} onClick={save}>📥 Bu Seansın Yoklamasını Veli Geçmişine Kaydet</button>
+    </div>{dirty && <p className="dirty">Kaydedilmemiş değişiklikler var. Kaydet düğmesine basmadan yoklama veli geçmişine işlenmez.</p>}{box}</div>
     <div className="card"><div className="bar">
       <div className="chips"><button className={"chip" + (floor === "all" ? " on" : "")} onClick={() => setFloor("all")}>Tüm Katlar</button>
         {floors.map((f) => <button key={f} className={"chip" + (floor === f ? " on" : "")} onClick={() => setFloor(f)}>{f}. Kat</button>)}</div>
-      <input placeholder="Öğrenci adı veya oda ara..." value={q} onChange={(e) => setQ(e.target.value)} />
+      <input placeholder="🔍 Öğrenci adı veya oda ara..." value={q} onChange={(e) => setQ(e.target.value)} />
     </div></div>
     <div className="grid">{list.map((s) => {
-      const isL = leave.has(s.id);
+      const isL = leave.has(s.id); const st = map[s.id]; const n = notified[s.id];
       return (
-        <div key={s.id} className={"sc" + (isL ? " leave" : "") + (!isL && map[s.id] === "yok" ? " absent" : "")}>
+        <div key={s.id} className={"sc" + (isL ? " leave" : "") + (!isL && st === "yok" ? " absent" : "")}>
           <div><span className="tag">{Math.floor(s.room / 100)}. Kat • Oda {s.room}</span><div className="nm">{s.full_name}</div></div>
           {isL ? <span className="lv">İZİNLİ</span> : (
             <div className="seg">
-              <button className={"var" + (map[s.id] === "var" ? " on" : "")} onClick={() => mark(s, "var")}>Var</button>
-              <button className={"yok" + (map[s.id] === "yok" ? " on" : "")} onClick={() => setAsk(s)}>Yok</button>
+              <button className={"var" + (st === "var" ? " on" : "")} onClick={() => pick(s, "var")}>Var</button>
+              <button className={"yok" + (st === "yok" ? " on" : "")} onClick={() => pick(s, "yok")}>Yok</button>
             </div>)}
+          {!isL && st === "yok" && (
+            <div className="wap"><b>🚨 Veliye WhatsApp Devamsızlık Mesajı:</b>
+              <div className="wab">
+                <button className="wb a" disabled={!s.mother_phone || !!n} onClick={() => notify(s, "anne")}>{n === "anne" ? "✔ Anneye gönderildi" : s.mother_phone ? `Anneye Gönder (${fmtPhone(s.mother_phone)})` : "Anne numarası yok"}</button>
+                <button className="wb b" disabled={!s.father_phone || !!n} onClick={() => notify(s, "baba")}>{n === "baba" ? "✔ Babaya gönderildi" : s.father_phone ? `Babaya Gönder (${fmtPhone(s.father_phone)})` : "Baba numarası yok"}</button>
+              </div></div>)}
         </div>);
     })}</div>
     {!list.length && <div className="card">Öğrenci bulunamadı.</div>}
-    {ask && (
-      <div className="ov" onClick={() => setAsk(null)}><div className="md card" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
-        <h3>{ask.full_name} — Yok</h3>
-        <p className="hint">Veliye “mazeretsiz katılmamıştır” bilgisi WhatsApp'tan gönderilsin mi?</p>
-        <button className="btn" disabled={!ask.mother_phone} onClick={() => send("anne")}>Anneye gönder{ask.mother_name ? ` (${ask.mother_name})` : ""}</button>
-        <button className="btn" disabled={!ask.father_phone} onClick={() => send("baba")}>Babaya gönder{ask.father_name ? ` (${ask.father_name})` : ""}</button>
-        <button className="btn ghost" onClick={() => send(null)}>Mesaj göndermeden kaydet</button>
-        <button className="btn ghost" onClick={() => setAsk(null)}>Vazgeç</button>
-      </div></div>)}
   </>);
 }
 
-function Students({ me, students, reload }) {
-  const [q, setQ] = useState(""); const [text, setText] = useState(""); const [res, setRes] = useState(null); const [run, box] = useAction();
-  const admin = me.role === "yon";
-  const list = students.filter((s) => (s.full_name + s.room).toLowerCase().includes(q.toLowerCase()));
+function Students({ students, reload }) {
+  const [q, setQ] = useState(""); const [text, setText] = useState(""); const [res, setRes] = useState(null);
+  const [f, setF] = useState({ gender: "E", kat: "1", oda: "" }); const [run, box] = useAction();
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const list = students.filter((s) => [s.full_name, s.room, s.mother_name, s.father_name].join(" ").toLowerCase().includes(q.toLowerCase()));
+  const add = (e) => {
+    e.preventDefault();
+    const oda = +f.oda; const room = oda >= 100 ? oda : (+f.kat) * 100 + oda;
+    run(async () => { await api("students/add", { full_name: f.full_name, gender: f.gender, room, mother_name: f.mother_name, mother_phone: f.mother_phone, father_name: f.father_name, father_phone: f.father_phone }); setF({ gender: f.gender, kat: f.kat, oda: "" }); reload(); }, "Öğrenci kaydedildi.");
+  };
+  const onFile = async (e) => {
+    const file = e.target.files[0]; e.target.value = ""; if (!file) return;
+    run(async () => {
+      const XLSX = await import("xlsx");
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, blankrows: false, raw: false });
+      const lines = rows.filter((r) => r[0] && !/ad\s*soyad/i.test(String(r[0]))).map((r) => Array.from({ length: 8 }, (_, i) => String(r[i] ?? "").trim()).join(";"));
+      if (!lines.length) throw new Error("Dosyada okunacak satır bulunamadı");
+      setRes(await api("students/import", { text: lines.join("\n") })); reload();
+    });
+  };
+  const val = (k) => f[k] || "";
   return (<>
-    {admin && (<div className="card"><h3>Excel'den Toplu Yapıştır</h3>
-      <p className="hint">Her satıra bir öğrenci, noktalı virgülle ayırın:<br /><code>Ad Soyad;Oda;Yatak;Cinsiyet (K/E);Anne Adı;Anne Tel;Baba Adı;Baba Tel</code><br />En az bir veli telefonu zorunludur.</p>
-      <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Zeynep Çelik;201;2;K;Ayşe Çelik;05551112233;Hasan Çelik;05554445566" />
-      <button className="btn" onClick={() => run(async () => { const r = await api("students/import", { text }); setRes(r); setText(""); reload(); })}>Buluta Aktar</button>
+    <div className="card">
+      <div className="hd"><div><h3>➕ Yeni Öğrenci Ekle</h3><p className="hint">Veli numarası boş bırakılabilir (numarasız veli portala giremez).</p></div>
+        {students.length > 0 && <button className="btn red sm" onClick={() => { if (confirm("Tüm öğrenciler, yoklama ve izin kayıtları silinecek. Emin misiniz?")) run(async () => { await api("students/reset", {}); reload(); }); }}>🗑️ Tüm Öğrencileri Sıfırla</button>}</div>
+      <form onSubmit={add}>
+        <div className="fgrid">
+          <input placeholder="Ad Soyad" value={val("full_name")} onChange={set("full_name")} required />
+          <select value={f.gender} onChange={set("gender")}><option value="E">Erkek Pansiyonu</option><option value="K">Kız Pansiyonu</option></select>
+          <select value={f.kat} onChange={set("kat")}><option value="1">1. Kat</option><option value="2">2. Kat</option><option value="3">3. Kat</option></select>
+          <input placeholder="Oda (örn. 3 veya 103)" inputMode="numeric" value={val("oda")} onChange={set("oda")} required />
+          <input placeholder="Anne Adı" value={val("mother_name")} onChange={set("mother_name")} />
+          <input placeholder="Anne Tel" inputMode="tel" value={val("mother_phone")} onChange={set("mother_phone")} />
+          <input placeholder="Baba Adı" value={val("father_name")} onChange={set("father_name")} />
+          <input placeholder="Baba Tel" inputMode="tel" value={val("father_phone")} onChange={set("father_phone")} />
+        </div>
+        {box}<button className="btn" style={{ width: "auto", marginLeft: "auto" }}>Öğrenciyi Kaydet</button>
+      </form>
+      <hr className="sep" />
+      <h3>📥 Excel'den Toplu Yükle</h3>
+      <p className="hint">Sütunlar: <code>Ad Soyad | Cinsiyet | Kat | Oda | Anne Adı | Anne Tel | Baba Adı | Baba Tel</code>. Dosya yükleyebilir ya da Excel'den kopyalayıp aşağıya yapıştırabilirsiniz.</p>
+      <label className="btn green filebtn">📂 Excel Dosyası Yükle (.xlsx, .xls, .csv)<input type="file" accept=".xlsx,.xls,.csv" hidden onChange={onFile} /></label>
+      <textarea style={{ marginTop: 10 }} value={text} onChange={(e) => setText(e.target.value)} placeholder="Ad Soyad | Cinsiyet | Kat | Oda | Anne Adı | Anne Tel | Baba Adı | Baba Tel" />
+      <button className="btn green" style={{ width: "auto", marginLeft: "auto" }} onClick={() => run(async () => { setRes(await api("students/import", { text })); setText(""); reload(); })}>Buluta Aktar</button>
       {res && <div className="ok">{res.added} öğrenci eklendi.</div>}
-      {res?.errors.map((x, i) => <div className="err" key={i}>{x}</div>)}</div>)}
-    <div className="card"><div className="bar"><input placeholder="Ad veya oda ara" value={q} onChange={(e) => setQ(e.target.value)} /></div>{box}
-      <div className="tw"><table className="tbl"><thead><tr><th>Ad Soyad</th><th>Pansiyon</th><th>Oda</th>{admin && <><th>Anne (Tel)</th><th>Baba (Tel)</th></>}<th>Durum</th>{admin && <th></th>}</tr></thead>
+      {res?.errors.slice(0, 15).map((x, i) => <div className="err" key={i}>{x}</div>)}
+    </div>
+    <div className="card"><div className="bar"><input placeholder="🔍 Öğrenci adı veya oda ara..." value={q} onChange={(e) => setQ(e.target.value)} /></div>
+      <div className="tw"><table className="tbl"><thead><tr><th>Ad Soyad</th><th>Pansiyon</th><th>Kat/Oda</th><th>Anne (Tel)</th><th>Baba (Tel)</th><th>Durum</th><th>İşlem</th></tr></thead>
         <tbody>{list.map((s) => (
-          <tr key={s.id}><td><b>{s.full_name}</b></td><td>{s.gender === "K" ? "Kız" : "Erkek"}</td><td>{s.room} / {s.bed}</td>
-            {admin && <><td>{s.mother_name || "-"}<small>{fmtPhone(s.mother_phone)}</small></td><td>{s.father_name || "-"}<small>{fmtPhone(s.father_phone)}</small></td></>}
+          <tr key={s.id}><td><b>{s.full_name}</b></td><td>{s.gender === "K" ? "👧 Kız" : "👦 Erkek"}</td><td>{Math.floor(s.room / 100)}. Kat / {s.room}</td>
+            <td>{s.mother_name || "-"}<small>{fmtPhone(s.mother_phone)}</small></td><td>{s.father_name || "-"}<small>{fmtPhone(s.father_phone)}</small></td>
             <td>{s.on_leave ? <span className="lv">İZİNLİ</span> : (
               <select value={s.status === "izinli" ? "yurtta" : s.status} aria-label={s.full_name + " durumu"} onChange={(e) => run(async () => { await api("students/status", { id: s.id, status: e.target.value }); reload(); })}>
                 {Object.entries(ST).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>)}</td>
-            {admin && <td><button className="btn red sm" onClick={() => { if (confirm(s.full_name + " silinsin mi?")) run(async () => { await api("students/delete", { id: s.id }); reload(); }); }}>Sil</button></td>}
+            <td><button className="btn red sm" onClick={() => { if (confirm(s.full_name + " silinsin mi?")) run(async () => { await api("students/delete", { id: s.id }); reload(); }); }}>Sil</button></td>
           </tr>))}</tbody></table></div>
-      {!list.length && "Kayıtlı öğrenci yok."}</div>
-    {admin && students.length > 0 && <div className="card"><button className="btn red" onClick={() => { if (confirm("Tüm öğrenciler, yoklama ve izin kayıtları silinecek. Emin misiniz?")) run(async () => { await api("students/reset", {}); reload(); }); }}>Tüm Öğrencileri Sıfırla</button></div>}
+      {!list.length && <p>Kayıtlı öğrenci yok.</p>}</div>
+  </>);
+}
+
+function Teachers() {
+  const [list, setList] = useState([]); const [f, setF] = useState({ scope: "E" }); const [cred, setCred] = useState(null);
+  const [ed, setEd] = useState(null); const [run, box] = useAction();
+  const load = () => api("users").then((d) => setList(d.users.filter((x) => x.role === "bel")));
+  useEffect(() => { load(); }, []);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const sed = (k) => (e) => setEd({ ...ed, [k]: e.target.value });
+  const show = (r, name) => setCred({ name, username: r.username, password: r.password });
+  return (<>
+    <div className="card"><h3>➕ Yeni Belletmen Öğretmen Ekle</h3>
+      <form onSubmit={(e) => { e.preventDefault(); run(async () => { const r = await api("users", f); show(r, f.full_name); setF({ scope: f.scope }); load(); }); }}>
+        <div className="fgrid">
+          <input placeholder="Ad Soyad" value={f.full_name || ""} onChange={set("full_name")} required />
+          <select value={f.scope} onChange={set("scope")}><option value="E">Erkek Belletmen</option><option value="K">Kız Belletmen</option></select>
+          <input placeholder="Branş" value={f.branch || ""} onChange={set("branch")} />
+          <input placeholder="Telefon (isteğe bağlı)" value={f.phone || ""} onChange={set("phone")} />
+          <input placeholder="Kullanıcı adı (boşsa otomatik)" value={f.username || ""} onChange={set("username")} />
+          <input placeholder="Şifre (boşsa otomatik)" value={f.password || ""} onChange={set("password")} />
+        </div>
+        {box}<button className="btn" style={{ width: "auto", marginLeft: "auto" }}>Belletmeni Kaydet</button>
+      </form>
+      {cred && <div className="ok"><b>{cred.name}</b> için giriş bilgileri (yalnızca şimdi gösterilir): kullanıcı adı <b>{cred.username}</b> · şifre <b>{cred.password}</b><br />İlk girişte şifre değiştirmesi istenir.</div>}
+    </div>
+    <div className="card"><div className="tw"><table className="tbl"><thead><tr><th>Ad Soyad</th><th>Görev Bloğu</th><th>Branş</th><th>Telefon</th><th>Kullanıcı adı</th><th>İşlem</th></tr></thead>
+      <tbody>{list.map((u) => ed?.id === u.id ? (
+        <tr key={u.id}><td><input value={ed.full_name} onChange={sed("full_name")} /></td>
+          <td><select value={ed.scope} onChange={sed("scope")}><option value="E">Erkek Pansiyonu</option><option value="K">Kız Pansiyonu</option></select></td>
+          <td><input value={ed.branch || ""} onChange={sed("branch")} /></td><td><input value={ed.phone || ""} onChange={sed("phone")} /></td><td>{u.username}</td>
+          <td className="ra"><button className="btn green sm" onClick={() => run(async () => { await api("users/update", ed); setEd(null); load(); })}>Kaydet</button><button className="btn ghost sm" onClick={() => setEd(null)}>İptal</button></td></tr>
+      ) : (
+        <tr key={u.id}><td><b>{u.full_name}</b></td><td>{u.scope === "K" ? "👧 Kız Pansiyonu" : "👦 Erkek Pansiyonu"}</td><td>{u.branch || "-"}</td><td>{u.phone || "-"}</td><td>{u.username}</td>
+          <td className="ra"><button className="btn amber sm" onClick={() => setEd({ id: u.id, full_name: u.full_name, scope: u.scope, branch: u.branch, phone: u.phone })}>Düzenle</button>
+            <button className="btn ghost sm" onClick={() => { if (confirm(u.full_name + " için şifre sıfırlansın mı?")) run(async () => { show(await api("users/reset", { id: u.id }), u.full_name); load(); }); }}>🔑 Şifre Sıfırla</button>
+            <button className="btn red sm" onClick={() => { if (confirm(u.full_name + " silinsin mi?")) run(async () => { await api("users/delete", { id: u.id }); load(); }); }}>Sil</button></td></tr>))}</tbody></table></div>
+      {!list.length && <p>Henüz belletmen yok.</p>}</div>
+  </>);
+}
+
+function Duty({ me, onCount }) {
+  const blank = () => ({ day: todayStr(), session: "etut", male_duty: "", female_duty: "", notes: "" });
+  const [rows, setRows] = useState([]); const [f, setF] = useState(blank()); const [run, box] = useAction();
+  const load = useCallback(() => api("duty").then((d) => { setRows(d.duty); onCount && onCount(d.duty.length); }), [onCount]);
+  useEffect(() => { load(); }, [load]);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  return (<>
+    <form className="card noprint" onSubmit={(e) => { e.preventDefault(); run(async () => { await api("duty", f); setF(blank()); load(); }, "Nöbet defteri kaydedildi."); }}>
+      <h3>{f.id ? "✏️ Kaydı düzenle" : "📖 Nöbet defterine kayıt ekle"}</h3>
+      <div className="fgrid">
+        <input type="date" value={f.day} onChange={set("day")} required />
+        <select value={f.session} onChange={set("session")}>{Object.entries(SES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+        <input placeholder="Erkek pansiyonu nöbetçileri" value={f.male_duty || ""} onChange={set("male_duty")} />
+        <input placeholder="Kız pansiyonu nöbetçileri" value={f.female_duty || ""} onChange={set("female_duty")} />
+      </div>
+      <textarea style={{ marginTop: 10 }} placeholder="Notlar" value={f.notes || ""} onChange={set("notes")} />
+      {box}<div className="bar" style={{ justifyContent: "flex-end" }}>
+        {f.id && <button type="button" className="btn ghost" style={{ flex: "0 0 auto", margin: 0 }} onClick={() => setF(blank())}>Vazgeç</button>}
+        <button className="btn" style={{ flex: "0 0 auto", margin: 0 }}>Kaydet</button></div>
+    </form>
+    <div className="card printable">
+      <div className="hd"><h3>📖 Kayıtlı Pansiyon Nöbet Defteri Tutanakları</h3><button className="btn ghost sm noprint" onClick={() => window.print()}>🖨️ PDF Çıktı Al</button></div>
+      <p className="only-print">Prof. Dr. Necmettin Erbakan Fen Lisesi Pansiyonu — Nöbet Defteri</p>
+      {rows.map((r) => (
+        <div className="duty" key={r.id}>
+          <div className="hd"><h4>📅 {dmy(r.day)} — {SES[r.session]}</h4>
+            <div className="noprint"><button className="btn amber sm" onClick={() => { setF({ ...r }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>Düzenle</button>
+              {me.role === "yon" && <button className="btn red sm" onClick={() => { if (confirm("Kayıt silinsin mi?")) run(async () => { await api("duty/delete", { id: r.id }); load(); }); }}>Sil</button>}</div></div>
+          <div className="two"><div className="box"><b>👦 Erkek Pansiyonu:</b> {r.male_duty || "-"}</div><div className="box"><b>👧 Kız Pansiyonu:</b> {r.female_duty || "-"}</div></div>
+          <div className="box" style={{ marginTop: 10 }}><b>Notlar:</b> {r.notes}</div>
+        </div>))}
+      {!rows.length && <p>Henüz kayıt yok.</p>}
+    </div>
   </>);
 }
 
@@ -143,7 +282,12 @@ function Leaves({ students }) {
   const load = useCallback(() => api("leaves").then((d) => setRows(d.leaves)), []);
   useEffect(() => { load(); }, [load]);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const now = Date.now();
+  const active = rows.filter((l) => new Date(l.starts_at) <= now && new Date(l.ends_at) >= now);
   return (<>
+    <div className="card"><h3>🟥 Şu an izinli öğrenciler ({active.length})</h3>
+      {active.map((l) => (<div className="stu leaveRow" key={l.id}><div className="n">{l.full_name}<small>Oda {l.room} · {l.kind} · {fmt(l.starts_at)} – {fmt(l.ends_at)}{l.requested_by_phone ? " · veli talebi" : ""}</small></div></div>))}
+      {!active.length && "Şu an izinli öğrenci yok."}</div>
     <form className="card" onSubmit={(e) => { e.preventDefault(); run(async () => { await api("leaves", f); load(); }, "İzin kaydedildi"); }}>
       <h3>Yeni izin</h3>
       <label>Öğrenci</label><select required onChange={set("student_id")} defaultValue=""><option value="" disabled>Seçin</option>{students.map((s) => <option key={s.id} value={s.id}>{s.full_name} (Oda {s.room})</option>)}</select>
@@ -152,51 +296,50 @@ function Leaves({ students }) {
       <label>Dönüş</label><input type="datetime-local" required onChange={set("ends_at")} />
       <label>Açıklama</label><input onChange={set("reason")} />
       {box}<button className="btn">İzni kaydet</button></form>
-    <div className="card"><h3>Son izinler</h3>{rows.map((l) => (<div className="stu" key={l.id}><div className="n">{l.full_name}<small>{l.kind} · {fmt(l.starts_at)} – {fmt(l.ends_at)}{l.requested_by_phone ? " · veli talebi" : ""}</small></div></div>))}{!rows.length && "Kayıtlı izin yok."}</div>
+    <div className="card"><h3>Son izin kayıtları</h3>{rows.map((l) => (<div className="stu" key={l.id}><div className="n">{l.full_name}<small>{l.kind} · {fmt(l.starts_at)} – {fmt(l.ends_at)}{l.requested_by_phone ? " · veli talebi" : ""}</small></div></div>))}{!rows.length && "Kayıtlı izin yok."}</div>
   </>);
 }
 
-function Users() {
-  const [list, setList] = useState([]); const [f, setF] = useState({ scope: "K" }); const [cred, setCred] = useState(null); const [run, box] = useAction();
-  const load = () => api("users").then((d) => setList(d.users));
-  useEffect(() => { load(); }, []);
-  return (<>
-    <form className="card" onSubmit={(e) => { e.preventDefault(); run(async () => { setCred(await api("users", f)); load(); }); }}>
-      <h3>Belletmen ekle</h3>
-      <label>Ad soyad</label><input required onChange={(e) => setF({ ...f, full_name: e.target.value })} />
-      <label>Kullanıcı adı</label><input required onChange={(e) => setF({ ...f, username: e.target.value })} />
-      <label>Sorumlu olduğu bölüm</label>
-      <select value={f.scope} onChange={(e) => setF({ ...f, scope: e.target.value })}><option value="K">Kız öğrenciler</option><option value="E">Erkek öğrenciler</option></select>
-      {box}{cred && <div className="ok">Geçici şifre (bir kez gösterilir): <b>{cred.password}</b> · kullanıcı adı: {cred.username}</div>}
-      <button className="btn">Hesap oluştur</button></form>
-    <div className="card">{list.map((u) => (<div className="stu" key={u.id}><div className="n">{u.full_name}<small>{u.username} · {ROLE[u.role]}{u.scope ? (u.scope === "K" ? " (kız)" : " (erkek)") : ""}</small></div></div>))}</div>
-  </>);
+function Logs() {
+  const [rows, setRows] = useState([]);
+  useEffect(() => { api("logs").then((d) => setRows(d.logs)).catch(() => {}); }, []);
+  return (<div className="card"><h3>📋 Son işlem kayıtları</h3>
+    <div className="tw"><table className="tbl"><thead><tr><th>Zaman</th><th>Kullanıcı</th><th>İşlem</th></tr></thead>
+      <tbody>{rows.map((r) => <tr key={r.id}><td>{fmt(r.created_at)}</td><td>{r.full_name || "Veli / sistem"}</td><td>{logText(r.action)}</td></tr>)}</tbody></table></div>
+    {!rows.length && <p>Kayıt yok.</p>}</div>);
 }
 
 export default function Home() {
-  const [st, setSt] = useState(null); const [students, setStudents] = useState([]); const [tab, setTab] = useState(null); const [tick, setTick] = useState(0);
+  const [st, setSt] = useState(null); const [students, setStudents] = useState([]); const [tab, setTab] = useState(null); const [tick, setTick] = useState(0); const [dutyN, setDutyN] = useState(0);
   const boot = useCallback(async () => {
     const d = await api("me"); setSt(d);
-    if (d.user && !d.user.must_change) setStudents((await api("students")).students);
+    if (d.user && !d.user.must_change) {
+      setStudents((await api("students")).students);
+      api("duty").then((x) => setDutyN(x.duty.length)).catch(() => {});
+    }
   }, []);
   useEffect(() => { boot(); }, [boot]);
   const refresh = async () => { await boot(); setTick((t) => t + 1); };
   if (!st) return <main className="wrap">Yükleniyor…</main>;
   if (!st.user) return <Gate setup={st.setup} onDone={boot} />;
   if (st.user.must_change) return <ChangePw onDone={boot} />;
-  const me = st.user;
-  const tabs = me.role === "bel" ? ["Yoklama", "Öğrenciler", "İzinler"] : ["Yoklama", "Öğrenciler", "İzinler", "Kullanıcılar"];
-  const cur = tab && tabs.includes(tab) ? tab : tabs[0];
+  const me = st.user; const n = students.length; const lv = students.filter((s) => s.on_leave).length;
+  const tabs = me.role === "bel"
+    ? [["yoklama", `📋 Etüt & Yat Yoklaması (${n})`], ["defter", `📖 Nöbet Defteri & PDF Çıktı (${dutyN})`], ["izin", `🟡 İzinli Öğrenci Listesi (${lv})`]]
+    : [["ogr", `🎓 Öğrenciler (${n})`], ["bel", "🧑‍🏫 Belletmenler"], ["yoklama", "📋 Yoklama"], ["defter", `📖 Nöbet Defteri (${dutyN})`], ["izin", `🟡 İzinler (${lv})`], ["log", "📋 Loglar"]];
+  const cur = tabs.some((t) => t[0] === tab) ? tab : tabs[0][0];
   const title = me.role === "yon" ? "İDARE PANELİ" : me.scope === "K" ? "KIZ PANSİYONU NÖBET EKRANI" : "ERKEK PANSİYONU NÖBET EKRANI";
   return (<div className="gate">
-    <header className="ph"><div className="pl"><Logo s={46} /><div><small>{title}</small><b>{me.full_name}</b></div></div>
+    <header className="ph noprint"><div className="pl"><Logo s={46} /><div><small>{title}</small><b>{me.full_name}</b></div></div>
       <div className="pr"><button className="btn ghost sm" onClick={refresh}>🔄 Listeyi Yenile</button>
         <button className="btn red sm" onClick={async () => { await api("logout", {}); boot(); }}>Çıkış</button></div></header>
     <main className="wrap">
-      <nav className="pills">{tabs.map((t) => <button key={t} className={"pill" + (t === cur ? " on" : "")} onClick={() => setTab(t)}>{t}{t === "Yoklama" || t === "Öğrenciler" ? ` (${students.length})` : ""}</button>)}</nav>
-      {cur === "Yoklama" && <Attendance students={students} tick={tick} />}
-      {cur === "Öğrenciler" && <Students me={me} students={students} reload={refresh} />}
-      {cur === "İzinler" && <Leaves students={students} />}
-      {cur === "Kullanıcılar" && <Users />}
+      <nav className="pills noprint">{tabs.map(([k, l]) => <button key={k} className={"pill" + (k === cur ? " on" : "")} onClick={() => setTab(k)}>{l}</button>)}</nav>
+      {cur === "yoklama" && <Attendance students={students} tick={tick} />}
+      {cur === "ogr" && <Students students={students} reload={refresh} />}
+      {cur === "bel" && <Teachers />}
+      {cur === "defter" && <Duty me={me} onCount={setDutyN} />}
+      {cur === "izin" && <Leaves students={students} />}
+      {cur === "log" && <Logs />}
     </main><Footer /></div>);
 }
